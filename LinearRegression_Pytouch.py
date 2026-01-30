@@ -1,100 +1,136 @@
+import pandas as pd
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
-import numpy as np
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import r2_score
 
-# === BƯỚC 1: ĐỊNH NGHĨA MÔ HÌNH ===
+# === BƯỚC 1: TẢI VÀ TIỀN XỬ LÝ DỮ LIỆU ===
+# Hãy đảm bảo file 'Student_Performance.csv' nằm cùng thư mục
+try:
+    df = pd.read_csv('Student_Performance.csv')
+except FileNotFoundError:
+    print("Lỗi: Không tìm thấy file CSV. Vui lòng kiểm tra lại!")
+    exit()
+
+# Chuyển đổi dữ liệu chữ sang số
+if 'Extracurricular Activities' in df.columns:
+    df['Extracurricular Activities'] = df['Extracurricular Activities'].map({'Yes': 1, 'No': 0})
+
+# Tách đặc trưng và mục tiêu
+X = df.drop('Performance Index', axis=1).values
+y = df['Performance Index'].values.reshape(-1, 1)
+
+# Chuẩn hóa dữ liệu (Bắt buộc đối với Deep Learning/PyTorch)
+scaler_X = StandardScaler()
+scaler_y = StandardScaler()
+
+X_scaled = scaler_X.fit_transform(X)
+y_scaled = scaler_y.fit_transform(y)
+
+# Chia tập huấn luyện và tập kiểm tra (80/20)
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_scaled, test_size=0.2, random_state=42)
+
+# Chuyển đổi sang PyTorch Tensors
+X_train_t = torch.tensor(X_train, dtype=torch.float32)
+y_train_t = torch.tensor(y_train, dtype=torch.float32)
+X_test_t = torch.tensor(X_test, dtype=torch.float32)
+y_test_t = torch.tensor(y_test, dtype=torch.float32)
+
+# === BƯỚC 2: XÂY DỰNG MÔ HÌNH ===
 class LinearRegressionModel(nn.Module):
-    def __init__(self, input_dim, output_dim):
+    def __init__(self, input_dim):
         super(LinearRegressionModel, self).__init__()
-        self.linear = nn.Linear(input_dim, output_dim)
-        
+        self.linear = nn.Linear(input_dim, 1)
+
     def forward(self, x):
         return self.linear(x)
 
-# === BƯỚC 2: TẠO DỮ LIỆU ===
-torch.manual_seed(42)
-X_train = torch.randn(100, 1)
-y_train = 4 + 3 * X_train + torch.randn(100, 1) * 0.5
+model = LinearRegressionModel(X_train_t.shape[1])
 
-X_test = torch.randn(20, 1)
-y_test = 4 + 3 * X_test + torch.randn(20, 1) * 0.5
-
-# === BƯỚC 3: KHỞI TẠO MÔ HÌNH VÀ CÔNG CỤ ===
-model = LinearRegressionModel(input_dim=1, output_dim=1)
+# === BƯỚC 3: CÀI ĐẶT HUẤN LUYỆN ===
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.01)
-
-# === BƯỚC 4: HUẤN LUYỆN MÔ HÌNH ===
-num_epochs = 1000
+optimizer = optim.Adam(model.parameters(), lr=0.01) # Adam thường tốt hơn SGD cho dữ liệu thực tế
 losses = []
 
-for epoch in range(num_epochs):
-    # Forward pass
-    y_pred = model(X_train)
-    loss = criterion(y_pred, y_train)
-    losses.append(loss.item())
+# === BƯỚC 4: VÒNG LẶP HUẤN LUYỆN (TRAINING LOOP) ===
+epochs = 100
+print("--- Đang bắt đầu huấn luyện ---")
+for epoch in range(epochs):
+    model.train()
     
-    # Backward pass và optimization
+    # Forward pass
+    outputs = model(X_train_t)
+    loss = criterion(outputs, y_train_t)
+    
+    # Backward pass và tối ưu
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
     
-    # In thông tin mỗi 100 epochs
-    if (epoch + 1) % 100 == 0:
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+    losses.append(loss.item())
+    if (epoch + 1) % 20 == 0:
+        print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
 
-# === BƯỚC 5: ĐÁNH GIÁ MÔ HÌNH ===
-model.eval()  # Chuyển sang chế độ evaluation
-with torch.no_grad(): # Tắt gradient computation
-    y_pred_test = model(X_test)
-    test_loss = criterion(y_pred_test, y_test)
+# === BƯỚC 5: DỰ ĐOÁN VÀ ĐÁNH GIÁ ===
+model.eval()
+with torch.no_grad():
+    y_pred_t = model(X_test_t)
     
-    # Tính R2 score
-    ss_res = torch.sum((y_test - y_pred_test) ** 2)
-    ss_tot = torch.sum((y_test - torch.mean(y_test)) ** 2)
-    r2_score = 1 - ss_res / ss_tot
+    # Nghịch đảo chuẩn hóa để về giá trị điểm thực tế (0-100)
+    y_test_actual = scaler_y.inverse_transform(y_test_t.numpy())
+    y_pred_actual = scaler_y.inverse_transform(y_pred_t.numpy())
+    
+    r2 = r2_score(y_test_actual, y_pred_actual)
+    print(f"\n--- ĐÁNH GIÁ MÔ HÌNH ---")
+    print(f"R2 Score: {r2:.4f}")
 
-print(f"\n--- KẾT QUẢ ---")
-print(f"Test Loss (MSE): {test_loss.item():.4f}")
-print(f"R2 Score: {r2_score.item():.4f}")
-print(f"Learned W: {model.linear.weight.item():.4f}")
-print(f"Learned b: {model.linear.bias.item():.4f}")
+# === BƯỚC 6: TRỰC QUAN HÓA CHUYÊN NGHIỆP ===
+sns.set_theme(style="darkgrid")
+plt.figure(figsize=(18, 5))
 
-# === BƯỚC 6: TRỰC QUAN HÓA ===
-plt.figure(figsize=(15, 5))
-
-# Subplot 1: Loss curve
+# Biểu đồ 1: Quá trình giảm Loss
 plt.subplot(1, 3, 1)
-plt.plot(losses)
+plt.plot(losses, color='blue', lw=2)
+plt.title('Đường cong Huấn luyện (Loss)')
 plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.title('Training Loss qua các Epochs')
-plt.grid(True, alpha=0.3)
+plt.ylabel('MSE Loss')
 
-# Subplot 2: Training data và đường hồi quy
+# Biểu đồ 2: Tương quan Thực tế vs Dự đoán
 plt.subplot(1, 3, 2)
-plt.scatter(X_train.numpy(), y_train.numpy(), alpha=0.5, label='Dữ liệu huấn luyện')
-X_range = torch.linspace(X_train.min(), X_train.max(), 100).reshape(-1, 1)
-with torch.no_grad():
-    y_range = model(X_range)
-plt.plot(X_range.numpy(), y_range.numpy(), 'r-', linewidth=2, label='Đường hồi quy')
-plt.xlabel('X')
-plt.ylabel('y')
-plt.title('Mô hình hồi quy tuyến tính')
-plt.legend()
-plt.grid(True, alpha=0.3)
-
-# Subplot 3: Actual vs Predicted
-plt.subplot(1, 3, 3)
-with torch.no_grad():
-    plt.scatter(y_test.numpy(), y_pred_test.numpy(), alpha=0.6)
-    plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--', linewidth=2)
-plt.xlabel('Giá trị thực tế')
+sns.scatterplot(x=y_test_actual.flatten(), y=y_pred_actual.flatten(), alpha=0.3, color='teal')
+plt.plot([y_test_actual.min(), y_test_actual.max()], [y_test_actual.min(), y_test_actual.max()], 'r--', lw=2)
+plt.title('Thực tế vs Dự đoán')
+plt.xlabel('Giá trị thực')
 plt.ylabel('Giá trị dự đoán')
-plt.title('Actual vs Predicted (Test Set)')
-plt.grid(True, alpha=0.3)
+
+# Biểu đồ 3: Phân phối sai số
+plt.subplot(1, 3, 3)
+residuals = y_test_actual - y_pred_actual
+sns.histplot(residuals, kde=True, color='purple')
+plt.axvline(x=0, color='red', linestyle='--')
+plt.title('Phân phối sai số (Residuals)')
 
 plt.tight_layout()
 plt.show()
+
+# === BƯỚC 7: DỰ ĐOÁN DỮ LIỆU MỚI ===
+def predict_new(features):
+    model.eval()
+    with torch.no_grad():
+        features_scaled = scaler_X.transform(np.array([features]))
+        features_t = torch.tensor(features_scaled, dtype=torch.float32)
+        pred_scaled = model(features_t)
+        pred_actual = scaler_y.inverse_transform(pred_scaled.numpy())
+        return pred_actual[0][0]
+
+# Thử nghiệm với dữ liệu mới
+# [Hours Studied, Previous Scores, Extracurricular Activities, Sleep Hours, Sample Question Papers Practiced]
+new_student = [7, 90, 1, 8, 4]
+result = predict_new(new_student)
+print(f"\n--- DỰ ĐOÁN SINH VIÊN MỚI ---")
+print(f"Với đầu vào {new_student} => Điểm dự kiến: {result:.2f}")
